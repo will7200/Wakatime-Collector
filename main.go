@@ -1,8 +1,16 @@
 package main
 
 import (
+	"github.com/jinzhu/copier"
+	"github.com/joomcode/errorx"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"gopkg.in/cheggaaa/pb.v1"
 	"net/http"
+	"os"
+	"os/signal"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/alecthomas/kingpin"
@@ -22,16 +30,21 @@ var (
 	wakatimeAPIKey = kingpin.Flag("wakatime-api-key", "wakatime api client key").Envar("WAKATIME_API_KEY").Short('k').String()
 	verbose        = kingpin.Flag("verbose", "verbose level").Short('v').Bool()
 
-	version string
+	BuildDate  string
+	GitCommit  string
+	GitBranch  string
+	GitState   string
+	GitSummary string
 )
 
 var (
-	logger      *zap.Logger
-	slackHooker *SlackHook
+	logger       *zap.Logger
+	slackHooker  *SlackCore
+	mappedObject DiskMappedObject
 )
 
 func init() {
-	kingpin.Version(version)
+	kingpin.Version(GitSummary + "; built on " + BuildDate)
 	kingpin.Parse()
 
 	config := zap.Config{
@@ -44,16 +57,41 @@ func init() {
 	}
 	var err error
 	var options []zap.Option
+	var cores []zapcore.Core
 	if *verbose {
 		config.EncoderConfig = zap.NewDevelopmentEncoderConfig()
 	} else {
 		config.EncoderConfig = zap.NewProductionEncoderConfig()
 		zap.NewAtomicLevelAt(zap.ErrorLevel)
 	}
+	encoder := zapcore.NewConsoleEncoder(config.EncoderConfig)
+
+	consoleDebugging := zapcore.Lock(os.Stdout)
+	consoleErrors := zapcore.Lock(os.Stderr)
+	highPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+		return lvl >= zapcore.ErrorLevel
+	})
+	lowPriority := zap.LevelEnablerFunc(func(lvl zapcore.Level) bool {
+		return lvl < zapcore.ErrorLevel
+	})
+
+	cores = append(cores, zapcore.NewCore(encoder, consoleErrors, highPriority))
+	cores = append(cores, zapcore.NewCore(encoder, consoleDebugging, lowPriority))
 	if *slackWebhook != "" {
-		slackHooker = NewSlackHook(*slackWebhook, config.Level.Level())
-		options = append(options, zap.Hooks(slackHooker.GetHook()))
+		var config1 zapcore.EncoderConfig
+		if err := copier.Copy(&config1, &config.EncoderConfig); err != nil {
+			panic(err)
+		}
+		config1.TimeKey = ""
+		config1.LevelKey = ""
+		config1.CallerKey = ""
+		encoder := NewKVEncoder(config1)
+		slackHooker = NewSlackCore(*slackWebhook, encoder, config.Level.Level())
+		cores = append(cores, slackHooker)
 	}
+	options = append(options, zap.WrapCore(func(core zapcore.Core) zapcore.Core {
+		return zapcore.NewTee(cores...)
+	}))
 	logger, err = config.Build(options...)
 	if err != nil {
 		panic(err)
@@ -74,23 +112,57 @@ func rangeLeaderBoardString() string {
 		return string(models.RangeLast7Days)
 	}
 }
-
 func main() {
+	go func() {
+		run()
+	}()
 
-	logger.Info("Starting Collector")
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	<-c
+	mappedObject.ForceSync()
+}
+
+func run() {
+	{
+		name, err := os.Hostname()
+		if err != nil {
+			panic(err)
+		}
+		logger.Info("Starting Collector", zap.String("node", name), zap.String("version", GitSummary))
+	}
+
+	defer logger.Sync()
+
 	// setup client
 	defaultT := apiclient.DefaultTransportConfig()
 
 	// cache the requests since i want to retrieve them later
 	rangeLeaderBoard := rangeLeaderBoardString()
 
-	tp := NewHuersticTransport(diskcache.NewWithDiskv(diskv.New(diskv.Options{
-		BasePath:     ".cache-" + time.Now().Format("2006-01-02") + "/" + rangeLeaderBoard,
+	dir := path.Join(".cache-" + time.Now().Format("2006-01-02"))
+	leaderBoardDir := path.Join(dir, rangeLeaderBoard)
+
+	/*opts := badger.DefaultOptions
+	opts.Dir = path.Join(dir, "db")
+	opts.ValueDir = path.Join(dir, "db")
+	db, err := badger.Open(opts)
+	if err != nil {
+		logger.Panic(err.Error())
+	}
+
+	defer db.Close()
+
+	txn := db.NewTransaction(true)
+	defer txn.Discard()*/
+
+	tp := NewHeuristicTransport(diskcache.NewWithDiskv(diskv.New(diskv.Options{
+		BasePath:     leaderBoardDir,
 		CacheSizeMax: 100 * 1024 * 1024,
 	})))
 
 	logger.Debug("Setting cached directory", zap.String("Cache-Directory",
-		".cache-"+time.Now().Format("2006-01-02")+"/"+rangeLeaderBoard))
+		leaderBoardDir))
 
 	runtime := httptransport.NewWithClient(defaultT.Host, defaultT.BasePath, defaultT.Schemes,
 		&http.Client{Timeout: 10 * time.Second, Transport: tp})
@@ -100,35 +172,51 @@ func main() {
 
 	_, err := client.User.User(nil, apiKeyAuth)
 	if err != nil {
-		logger.Panic(err.Error())
+		logger.Fatal(err.Error())
 	}
 	// fmt.Printf("%# v\n", pretty.Formatter(user))
 	params := userclient.NewStatsParams()
 	params.Range = string(models.RangeLast7Days)
 	_, _, err = client.User.Stats(params, apiKeyAuth)
 	if err != nil {
-		logger.Panic(err.Error())
+		logger.Fatal(err.Error())
 	}
 	// fmt.Printf("%# v\n", pretty.Formatter(use))
 
 	// Leader boards
-	/*params2 := leaders.NewLeaderParams()
+	params2 := leaders.NewLeaderParams()
 	var start int64 = 1
 	params2.Page = &start
 	leader, err := client.Leaders.Leader(params2, apiKeyAuth)
 	if err != nil {
-		panic(err)
+		logger.Fatal(err.Error())
 	}
-	bar := pb.StartNew(int(leader.Payload.TotalPages))
+
+	bar := pb.New(int(leader.Payload.TotalPages))
 	users := make(map[string]bool, bar.Total*100)
-	addUsers(leader, users)
+	filename := path.Join(dir, "users.tmp")
+	mappedObject = DiskMappedObject{
+		file:   filename,
+		mapped: &users,
+	}
+	mappedObject.Read()
+	defer mappedObject.Sync()
+	if err := mappedObject.PeriodicWrite(time.Second * 60); err != nil {
+		err = errorx.InitializationFailed.New("Failed to start synced users object")
+		logger.Fatal(err.Error())
+	}
+	logger.Debug("Estimating total users", zap.Int64("users", bar.Total*100))
+
+	addUsers(leader, users, mappedObject)
+
+	bar.Start()
 	bar.Increment()
 	for ; ; {
 		leader, err := client.Leaders.Leader(params2, apiKeyAuth)
 		if err != nil {
 			panic(err)
 		}
-		addUsers(leader, users)
+		addUsers(leader, users, mappedObject)
 		if *params2.Page == leader.Payload.TotalPages {
 			break
 		}
@@ -136,8 +224,17 @@ func main() {
 		*params2.Page = *params2.Page + 1
 	}
 	bar.Finish()
+
+	logger.Debug("Actual total users", zap.Int64("users", int64(len(users))))
+
 	bar = pb.StartNew(len(users))
 	for key := range users {
+		// mappedObject.lock.RLock()
+		if users[key] {
+			// mappedObject.lock.RUnlock()
+			continue
+		}
+		// mappedObject.lock.RUnlock()
 		params := userclient.NewStatsParams()
 		params.User = key
 		_, accepted, err := client.User.Stats(params, apiKeyAuth)
@@ -148,16 +245,25 @@ func main() {
 			if strings.Contains(err.Error(), "Client.Timeout") {
 				continue
 			}
-			panic(err)
+			logger.Panic(err.Error())
 		}
+		mappedObject.lock.Lock()
 		users[key] = true
+		mappedObject.lock.Unlock()
 		bar.Increment()
 	}
-	bar.Finish()*/
+	bar.Finish()
 }
 
-func addUsers(leaderboard *leaders.LeaderOK, mapusers map[string]bool) {
+func addUsers(leaderboard *leaders.LeaderOK, mapusers map[string]bool, m DiskMappedObject) {
 	for _, data := range leaderboard.Payload.Data {
-		mapusers[data.User.ID] = false
+		m.lock.RLock()
+		_, ok := mapusers[data.User.ID];
+		m.lock.RUnlock()
+		if !ok {
+			m.lock.Lock()
+			mapusers[data.User.ID] = false
+			m.lock.Unlock()
+		}
 	}
 }
