@@ -19,7 +19,7 @@ const (
 	XFromCache = "X-From-Cache"
 )
 
-// A Cache interface is used by the Transport to store and retrieve responses.
+// Cache interface is used by the Transport to store and retrieve responses.
 type Cache interface {
 	// Get returns the []byte representation of a cached response and a bool
 	// set to true if the value isn't empty
@@ -30,6 +30,7 @@ type Cache interface {
 	Delete(key string)
 }
 
+// Heuristic interface is used by the Transport to determine whether or not to cache a response
 type Heuristic interface {
 	PreCaching(response *http.Response)
 	PostRequest(response *http.Response)
@@ -37,6 +38,7 @@ type Heuristic interface {
 	CacheKey(r *http.Request) string
 }
 
+// Transport type
 type Transport struct {
 	// The RoundTripper interface actually used to make requests
 	// If nil, http.DefaultTransport is used
@@ -47,34 +49,36 @@ type Transport struct {
 	MarkCachedResponses bool
 }
 
-type HueristicStruct struct {
+// HeuristicTime types
+type HeuristicTime struct {
 	CacheForAmount time.Duration
 	requestCount   int
 }
 
-func (h *HueristicStruct) PostRequest(response *http.Response) {
-	response.Header.Set("expires", time.Now().Add(h.CacheForAmount * time.Second).Format(http.TimeFormat))
+func (h *HeuristicTime) PostRequest(response *http.Response) {
+	response.Header.Set("expires", time.Now().Add(h.CacheForAmount*time.Second).Format(http.TimeFormat))
 	response.Header.Set("cache-control", "public")
 	response.Header.Set("x-request-count", strconv.Itoa(h.requestCount))
 	h.requestCount++
 }
 
-func (*HueristicStruct) Cacheable(r *http.Request) bool {
+func (*HeuristicTime) Cacheable(r *http.Request) bool {
 	return true
 }
 
-func (*HueristicStruct) CacheKey(r *http.Request) string {
+func (*HeuristicTime) CacheKey(r *http.Request) string {
 	return r.Method + " " + r.URL.String()
 }
 
-func (*HueristicStruct) PreCaching(response *http.Response) {
+func (*HeuristicTime) PreCaching(response *http.Response) {
 	// panic("implement me")
 	return
 }
 
 func DefaultHeuristic() Heuristic {
-	return &HueristicStruct{60 * 60 * 24 * 365 * 10, 0}
+	return &HeuristicTime{60 * 60 * 24 * 365 * 10, 0}
 }
+
 func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 	cacheKey := t.THeuristic.CacheKey(req)
 	cacheable := t.THeuristic.Cacheable(req)
@@ -136,6 +140,7 @@ func CachedResponse(c Cache, req *http.Request, cacheKey string) (resp *http.Res
 	return http.ReadResponse(bufio.NewReader(b), req)
 }
 
-func NewHuersticTransport(c Cache) *Transport {
+// NewHeuristicTransport return a new Transport that uses the default Time based Heuristic for 10 years
+func NewHeuristicTransport(c Cache) *Transport {
 	return &Transport{Cache: c, MarkCachedResponses: true, THeuristic: DefaultHeuristic()}
 }
