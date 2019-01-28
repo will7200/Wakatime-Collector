@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"strings"
 	"sync"
 	"time"
 )
@@ -65,6 +66,17 @@ func GlobDecoder(r io.Reader, v interface{}) error {
 	return nil
 }
 
+func targetPathExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
 type DiskMappedObject struct {
 	mapped interface{}
 	file   string
@@ -119,8 +131,33 @@ func (m *DiskMappedObject) Write(force bool) (rerr error) {
 		return err
 	}
 
+	if found, err := targetPathExists(m.file); !found && err == nil {
+		f, err := os.Create(m.file)
+		if err != nil {
+			return err
+		}
+		f.Close()
+	}
 	err = os.Rename(tmpfile.Name(), m.file)
 	if err != nil {
+		if strings.Contains(err.Error(), "invalid cross-device") {
+			f, err := os.Create(m.file)
+			if err != nil {
+				return err
+			}
+			tmpfile.Sync()
+			tmpfile.Seek(0, 0)
+			_, err = io.Copy(f, tmpfile)
+			if err != nil {
+				return err
+			}
+			err = f.Sync()
+			if err != nil {
+				return err
+			}
+			err = f.Close()
+			return err
+		}
 		return err
 	}
 	return nil
