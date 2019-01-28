@@ -26,9 +26,9 @@ import (
 
 var (
 	leaderRange    = kingpin.Arg("range", "range pick from 7, 30, 180, 365").Default("7").Int()
-	slackWebhook   = kingpin.Flag("slack-webhook", "webhook for slack errors").Short('w').String()
+	slackWebhook   = kingpin.Flag("slack-webhook", "webhook for slack errors").Envar("SLACK_HOOK").Short('w').String()
 	wakatimeAPIKey = kingpin.Flag("wakatime-api-key", "wakatime api client key").Envar("WAKATIME_API_KEY").Short('k').String()
-	verbose        = kingpin.Flag("verbose", "verbose level").Short('v').Bool()
+	verbose        = kingpin.Flag("verbose", "verbose level").Envar("COLLECTOR_VERBOSE").Short('v').Bool()
 
 	BuildDate  string
 	GitCommit  string
@@ -211,7 +211,7 @@ func run() {
 
 	bar.Start()
 	bar.Increment()
-	for ; ; {
+	for {
 		leader, err := client.Leaders.Leader(params2, apiKeyAuth)
 		if err != nil {
 			panic(err)
@@ -227,11 +227,21 @@ func run() {
 
 	logger.Debug("Actual total users", zap.Int64("users", int64(len(users))))
 
+	total := 0
+	for _, val := range users {
+		if val {
+			total += 1
+		}
+	}
+
+	logger.Debug("Total Users Collected", zap.Int("acquired", total))
+
 	bar = pb.StartNew(len(users))
 	for key := range users {
 		// mappedObject.lock.RLock()
 		if users[key] {
 			// mappedObject.lock.RUnlock()
+			bar.Increment()
 			continue
 		}
 		// mappedObject.lock.RUnlock()
@@ -258,7 +268,7 @@ func run() {
 func addUsers(leaderboard *leaders.LeaderOK, mapusers map[string]bool, m DiskMappedObject) {
 	for _, data := range leaderboard.Payload.Data {
 		m.lock.RLock()
-		_, ok := mapusers[data.User.ID];
+		_, ok := mapusers[data.User.ID]
 		m.lock.RUnlock()
 		if !ok {
 			m.lock.Lock()
