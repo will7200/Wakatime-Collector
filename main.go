@@ -113,13 +113,15 @@ func rangeLeaderBoardString() string {
 	}
 }
 func main() {
+	c := make(chan os.Signal, 1)
+
 	go func() {
-		run()
+		signal.Notify(c, os.Interrupt)
+		<-c
+		mappedObject.ForceSync()
 	}()
 
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	<-c
+	run()
 	mappedObject.ForceSync()
 }
 
