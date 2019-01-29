@@ -1,11 +1,6 @@
 package main
 
 import (
-	"github.com/jinzhu/copier"
-	"github.com/joomcode/errorx"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"gopkg.in/cheggaaa/pb.v1"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,7 +12,13 @@ import (
 	httptransport "github.com/go-openapi/runtime/client"
 	"github.com/go-openapi/strfmt"
 	"github.com/gregjones/httpcache/diskcache"
+	"github.com/jinzhu/copier"
+	"github.com/joomcode/errorx"
 	"github.com/peterbourgon/diskv"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"gopkg.in/cheggaaa/pb.v1"
+
 	apiclient "github.com/will7200/go-wakatime/client"
 	"github.com/will7200/go-wakatime/client/leaders"
 	userclient "github.com/will7200/go-wakatime/client/user"
@@ -86,7 +87,7 @@ func init() {
 		config1.LevelKey = ""
 		config1.CallerKey = ""
 		encoder := NewKVEncoder(config1)
-		slackHooker = NewSlackCore(*slackWebhook, encoder, config.Level.Level())
+		slackHooker = NewSlackCore(*slackWebhook, encoder, zap.InfoLevel)
 		cores = append(cores, slackHooker)
 	}
 	options = append(options, zap.WrapCore(func(core zapcore.Core) zapcore.Core {
@@ -145,19 +146,7 @@ func run() {
 	dir := path.Join(".cache-" + time.Now().Format("2006-01-02"))
 	leaderBoardDir := path.Join(dir, rangeLeaderBoard)
 
-	/*opts := badger.DefaultOptions
-	opts.Dir = path.Join(dir, "db")
-	opts.ValueDir = path.Join(dir, "db")
-	db, err := badger.Open(opts)
-	if err != nil {
-		logger.Panic(err.Error())
-	}
-
-	defer db.Close()
-
-	txn := db.NewTransaction(true)
-	defer txn.Discard()*/
-
+	// Setup a disk back request cache note that this is a very aggressive caching method and it doesn't follow normal standards
 	tp := NewHeuristicTransport(diskcache.NewWithDiskv(diskv.New(diskv.Options{
 		BasePath:     leaderBoardDir,
 		CacheSizeMax: 100 * 1024 * 1024,
@@ -236,7 +225,10 @@ func run() {
 		}
 	}
 
-	logger.Debug("Total Users Collected", zap.Int("acquired", total))
+	logger.Info("Total Users Collected", zap.Int("acquired", total))
+	logger.Info("Remaining Users to be collected", zap.Int("remaining", int(len(users)-total)))
+
+	skipped := 0
 
 	bar = pb.StartNew(len(users))
 	for key := range users {
@@ -251,10 +243,13 @@ func run() {
 		params.User = key
 		_, accepted, err := client.User.Stats(params, apiKeyAuth)
 		if accepted != nil {
+			skipped += 1
 			continue
 		}
 		if err != nil {
+			// This occurs when the computation is taking to long.
 			if strings.Contains(err.Error(), "Client.Timeout") {
+				skipped += 1
 				continue
 			}
 			logger.Panic(err.Error())
@@ -265,6 +260,18 @@ func run() {
 		bar.Increment()
 	}
 	bar.Finish()
+	if skipped > 0 {
+		logger.Info("Skipped %d due to timeouts or non 200 responses")
+	}
+	{
+		total := 0
+		for _, val := range users {
+			if val {
+				total += 1
+			}
+		}
+		logger.Info("Total Users Collected", zap.Int("users", total), zap.Int("of", len(users)))
+	}
 }
 
 func addUsers(leaderboard *leaders.LeaderOK, mapusers map[string]bool, m DiskMappedObject) {
