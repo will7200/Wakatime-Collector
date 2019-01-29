@@ -261,7 +261,7 @@ func run() {
 	}
 	bar.Finish()
 	if skipped > 0 {
-		logger.Info("Skipped %d due to timeouts or non 200 responses")
+		logger.Info("Skipped some due to timeouts or non 200 responses", zap.Int("skipped", skipped))
 	}
 	{
 		total := 0
