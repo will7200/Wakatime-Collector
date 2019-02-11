@@ -258,7 +258,7 @@ func run() {
 				skippedTimeout += 1
 				continue
 			}
-			logger.Panic(err.Error())
+			logger.Error(err.Error())
 		}
 		mappedObject.lock.Lock()
 		users[key] = true

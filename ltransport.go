@@ -108,7 +108,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 	resp, err = transport.RoundTrip(req)
 	if resp.StatusCode >= 300 {
 		b, _ := httputil.DumpResponse(resp, true)
-		logger.Warn("Status Code above 300\n" + string(b))
+		logger.Warn("Status Code above 300\nUrl:" + req.URL.String() + "\n" + string(b))
 	}
 	if err != nil {
 		return nil, err
