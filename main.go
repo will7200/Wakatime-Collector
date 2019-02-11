@@ -30,6 +30,7 @@ var (
 	slackWebhook   = kingpin.Flag("slack-webhook", "webhook for slack errors").Envar("SLACK_HOOK").Short('w').String()
 	wakatimeAPIKey = kingpin.Flag("wakatime-api-key", "wakatime api client key").Envar("WAKATIME_API_KEY").Short('k').String()
 	verbose        = kingpin.Flag("verbose", "verbose level").Envar("COLLECTOR_VERBOSE").Short('v').Bool()
+	clientTimeout  = kingpin.Flag("http-timeout", "http client timeout").Default("10").Int()
 
 	BuildDate  string
 	GitCommit  string
@@ -113,6 +114,7 @@ func rangeLeaderBoardString() string {
 		return string(models.RangeLast7Days)
 	}
 }
+
 func main() {
 	c := make(chan os.Signal, 1)
 
@@ -147,16 +149,19 @@ func run() {
 	leaderBoardDir := path.Join(dir, rangeLeaderBoard)
 
 	// Setup a disk back request cache note that this is a very aggressive caching method and it doesn't follow normal standards
-	tp := NewHeuristicTransport(diskcache.NewWithDiskv(diskv.New(diskv.Options{
-		BasePath:     leaderBoardDir,
-		CacheSizeMax: 100 * 1024 * 1024,
-	})))
+	tp := NewHeuristicTransport(
+		diskcache.NewWithDiskv(
+			diskv.New(
+				diskv.Options{
+					BasePath:     leaderBoardDir,
+					CacheSizeMax: 100 * 1024 * 1024,
+				})))
 
 	logger.Debug("Setting cached directory", zap.String("Cache-Directory",
 		leaderBoardDir))
 
 	runtime := httptransport.NewWithClient(defaultT.Host, defaultT.BasePath, defaultT.Schemes,
-		&http.Client{Timeout: 10 * time.Second, Transport: tp})
+		&http.Client{Timeout: time.Duration(*clientTimeout) * time.Second, Transport: tp})
 
 	client := apiclient.New(runtime, strfmt.Default)
 	apiKeyAuth := httptransport.APIKeyAuth("api_key", "query", *wakatimeAPIKey)
@@ -228,7 +233,8 @@ func run() {
 	logger.Info("Total Users Collected", zap.Int("acquired", total))
 	logger.Info("Remaining Users to be collected", zap.Int("remaining", int(len(users)-total)))
 
-	skipped := 0
+	skippedTimeout := 0
+	skippedAccepted := 0
 
 	bar = pb.StartNew(len(users))
 	for key := range users {
@@ -243,13 +249,13 @@ func run() {
 		params.User = key
 		_, accepted, err := client.User.Stats(params, apiKeyAuth)
 		if accepted != nil {
-			skipped += 1
+			skippedAccepted += 1
 			continue
 		}
 		if err != nil {
 			// This occurs when the computation is taking to long.
 			if strings.Contains(err.Error(), "Client.Timeout") {
-				skipped += 1
+				skippedTimeout += 1
 				continue
 			}
 			logger.Panic(err.Error())
@@ -260,8 +266,11 @@ func run() {
 		bar.Increment()
 	}
 	bar.Finish()
-	if skipped > 0 {
-		logger.Info("Skipped some due to timeouts or non 200 responses", zap.Int("skipped", skipped))
+	if skippedTimeout > 0 {
+		logger.Info("Skipped some due to non 200 responses", zap.Int("skipped", skippedAccepted))
+	}
+	if skippedAccepted > 0 {
+		logger.Info("Skipped some due to timeouts", zap.Int("skipped", skippedTimeout))
 	}
 	{
 		total := 0
