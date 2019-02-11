@@ -26,7 +26,7 @@ require (
 	github.com/pkg/errors v0.8.1 // indirect
 	github.com/pquerna/cachecontrol v0.0.0-20180517163645-1555304b9b35
 	github.com/stretchr/objx v0.1.1 // indirect
-	github.com/will7200/go-wakatime v0.1.6
+	github.com/will7200/go-wakatime v0.1.7
 	go.uber.org/atomic v1.3.2 // indirect
 	go.uber.org/multierr v1.1.0 // indirect
 	go.uber.org/zap v1.9.1
