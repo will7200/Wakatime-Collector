@@ -245,6 +245,7 @@ func run() {
 			continue
 		}
 		// mappedObject.lock.RUnlock()
+	retry:
 		params := userclient.NewStatsParams()
 		params.User = key
 		_, accepted, err := client.User.Stats(params, apiKeyAuth)
@@ -257,6 +258,10 @@ func run() {
 			if strings.Contains(err.Error(), "Client.Timeout") {
 				skippedTimeout += 1
 				continue
+			}
+			if strings.Contains(err.Error(), "(status 429)") {
+				time.Sleep(time.Second * 1)
+				goto retry
 			}
 			logger.Error(err.Error())
 		}
