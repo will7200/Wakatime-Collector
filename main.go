@@ -122,6 +122,7 @@ func main() {
 		signal.Notify(c, os.Interrupt)
 		<-c
 		mappedObject.ForceSync()
+		os.Exit(1)
 	}()
 
 	run()
@@ -190,6 +191,7 @@ func run() {
 
 	bar := pb.New(int(leader.Payload.TotalPages))
 	users := make(map[string]bool, bar.Total*100)
+	addUsersFromArray(users)
 	filename := path.Join(dir, "users.tmp")
 	mappedObject = DiskMappedObject{
 		file:   filename,
@@ -272,10 +274,10 @@ func run() {
 	}
 	bar.Finish()
 	if skippedTimeout > 0 {
-		logger.Info("Skipped some due to non 200 responses", zap.Int("skipped", skippedAccepted))
+		logger.Info("Skipped some due to non 200 responses", zap.Int("skipped", skippedTimeout))
 	}
 	if skippedAccepted > 0 {
-		logger.Info("Skipped some due to timeouts", zap.Int("skipped", skippedTimeout))
+		logger.Info("Skipped some due to timeouts", zap.Int("skipped", skippedAccepted))
 	}
 	{
 		total := 0
@@ -298,5 +300,19 @@ func addUsers(leaderboard *leaders.LeaderOK, mapusers map[string]bool, m DiskMap
 			mapusers[data.User.ID] = false
 			m.lock.Unlock()
 		}
+	}
+}
+
+func addUsersFromArray(mapusers map[string]bool) {
+	var users []string
+	users = make([]string, 6000)
+	file := "allusers.array"
+	if _, err := os.Stat(file); err == nil {
+		if err := Load(file, &users, GlobDecoder); err != nil {
+			panic(err.Error())
+		}
+	}
+	for _, val := range users {
+		mapusers[val] = false
 	}
 }

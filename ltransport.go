@@ -56,7 +56,7 @@ type HeuristicTime struct {
 }
 
 func (h *HeuristicTime) PostRequest(response *http.Response) {
-	response.Header.Set("expires", time.Now().Add(h.CacheForAmount * time.Second).Format(http.TimeFormat))
+	response.Header.Set("expires", time.Now().Add(h.CacheForAmount*time.Second).Format(http.TimeFormat))
 	response.Header.Set("cache-control", "public")
 	response.Header.Set("x-request-count", strconv.Itoa(h.requestCount))
 	h.requestCount++
@@ -109,7 +109,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode >= 300 && resp.StatusCode != 429 {
+	if resp.StatusCode >= 300 && resp.StatusCode != 429 && resp.StatusCode != 404 {
 		b, _ := httputil.DumpResponse(resp, true)
 		logger.Warn("Status Code above 300\nUrl:" + req.URL.String() + "\n" + string(b))
 	}
