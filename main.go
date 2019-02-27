@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/alecthomas/kingpin"
@@ -47,7 +46,7 @@ var (
 
 func init() {
 	kingpin.Version(GitSummary + "; built on " + BuildDate)
-	kingpin.Parse()
+	kingpin.CommandLine.Parse(os.Args[1:])
 
 	config := zap.Config{
 		Level:       zap.NewAtomicLevelAt(zap.DebugLevel),
@@ -240,13 +239,10 @@ func run() {
 
 	bar = pb.StartNew(len(users))
 	for key := range users {
-		// mappedObject.lock.RLock()
 		if users[key] {
-			// mappedObject.lock.RUnlock()
 			bar.Increment()
 			continue
 		}
-		// mappedObject.lock.RUnlock()
 	retry:
 		params := userclient.NewStatsParams()
 		params.User = key
@@ -256,14 +252,16 @@ func run() {
 			continue
 		}
 		if err != nil {
-			// This occurs when the computation is taking to long.
-			if strings.Contains(err.Error(), "Client.Timeout") {
-				skippedTimeout += 1
-				continue
-			}
-			if strings.Contains(err.Error(), "(status 429)") {
+			err = parseError(err)
+			switch {
+			case errorx.IsOfType(err, RateLimited):
 				time.Sleep(time.Second * 1)
 				goto retry
+			case errorx.IsOfType(err, Timeout):
+				skippedTimeout += 1
+				continue
+			case errorx.IsOfType(err, NotFound):
+				continue
 			}
 			logger.Error(err.Error())
 		}
