@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kingpin"
+	"github.com/cenkalti/backoff"
 	httptransport "github.com/go-openapi/runtime/client"
 	"github.com/go-openapi/strfmt"
 	"github.com/gregjones/httpcache/diskcache"
@@ -237,12 +238,15 @@ func run() {
 	skippedTimeout := 0
 	skippedAccepted := 0
 
+	expBackOff := backoff.NewExponentialBackOff()
+
 	bar = pb.StartNew(len(users))
 	for key := range users {
 		if users[key] {
 			bar.Increment()
 			continue
 		}
+		expBackOff.Reset()
 	retry:
 		params := userclient.NewStatsParams()
 		params.User = key
@@ -255,7 +259,12 @@ func run() {
 			err = parseError(err)
 			switch {
 			case errorx.IsOfType(err, RateLimited):
-				time.Sleep(time.Second * 1)
+				duration := expBackOff.NextBackOff()
+				if duration == backoff.Stop {
+					expBackOff.Reset()
+				} else {
+					time.Sleep(duration)
+				}
 				goto retry
 			case errorx.IsOfType(err, Timeout):
 				skippedTimeout += 1
@@ -271,12 +280,14 @@ func run() {
 		bar.Increment()
 	}
 	bar.Finish()
+
 	if skippedTimeout > 0 {
 		logger.Info("Skipped some due to non 200 responses", zap.Int("skipped", skippedTimeout))
 	}
 	if skippedAccepted > 0 {
 		logger.Info("Skipped some due to timeouts", zap.Int("skipped", skippedAccepted))
 	}
+
 	{
 		total := 0
 		for _, val := range users {
