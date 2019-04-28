@@ -239,6 +239,10 @@ func run() {
 	skippedAccepted := 0
 
 	expBackOff := backoff.NewExponentialBackOff()
+	expBackOff.InitialInterval = 1 * time.Second
+	expBackOff.MaxInterval = 15 * time.Minute
+	expBackOff.MaxElapsedTime = 1 * time.Hour
+	expBackOff.Reset()
 
 	bar = pb.StartNew(len(users))
 	for key := range users {
@@ -246,13 +250,14 @@ func run() {
 			bar.Increment()
 			continue
 		}
-		expBackOff.Reset()
+		// expBackOff.Reset()
 	retry:
 		params := userclient.NewStatsParams()
 		params.User = key
 		_, accepted, err := client.User.Stats(params, apiKeyAuth)
 		if accepted != nil {
 			skippedAccepted += 1
+			expBackOff.Reset()
 			continue
 		}
 		if err != nil {
@@ -278,6 +283,7 @@ func run() {
 		users[key] = true
 		mappedObject.lock.Unlock()
 		bar.Increment()
+		expBackOff.Reset()
 	}
 	bar.Finish()
 
