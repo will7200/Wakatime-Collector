@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
+	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"os/signal"
@@ -43,6 +47,10 @@ var (
 	logger       *zap.Logger
 	slackHooker  *SlackCore
 	mappedObject DiskMappedObject
+)
+
+var (
+	usersFile = "allusers.array"
 )
 
 func init() {
@@ -206,6 +214,7 @@ func run() {
 	logger.Debug("Estimating total users", zap.Int64("users", bar.Total*100))
 
 	addUsers(leader, users, mappedObject)
+	writeAllUsers(users)
 
 	bar.Start()
 	bar.Increment()
@@ -320,14 +329,79 @@ func addUsers(leaderboard *leaders.LeaderOK, mapusers map[string]bool, m DiskMap
 
 func addUsersFromArray(mapusers map[string]bool) {
 	var users []string
-	users = make([]string, 6000)
-	file := "allusers.array"
-	if _, err := os.Stat(file); err == nil {
-		if err := Load(file, &users, GlobDecoder); err != nil {
+	users = make([]string, 0)
+	if _, err := os.Stat(usersFile); err == nil {
+		if err := Load(usersFile, &users, GlobDecoder); err != nil {
 			panic(err.Error())
 		}
 	}
 	for _, val := range users {
 		mapusers[val] = false
 	}
+}
+
+func writeAllUsers(m map[string]bool) {
+	users := make([]string, len(m))
+	i := 0
+	for key, _ := range m {
+		users[i] = key
+		i += 1
+	}
+	b, err := GlobEncoder(users)
+	if err != nil {
+		panic(err)
+	}
+	writeAtomically(usersFile, func(w io.Writer) error {
+		bb := b.(*bytes.Buffer)
+		_, err := w.Write(bb.Bytes())
+		return err
+	})
+}
+
+func writeAtomically(dest string, write func(w io.Writer) error) (err error) {
+	f, err := ioutil.TempFile("", "atomic-")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// Clean up (best effort) in case we are returning with an error:
+		if err != nil {
+			// Prevent file descriptor leaks.
+			f.Close()
+			// Remove the tempfile to avoid filling up the file system.
+			os.Remove(f.Name())
+		}
+	}()
+
+	// Use a buffered writer to minimize write(2) syscalls.
+	bufw := bufio.NewWriter(f)
+
+	w := io.Writer(bufw)
+
+	if err := write(w); err != nil {
+		return err
+	}
+
+	if err := bufw.Flush(); err != nil {
+		return err
+	}
+
+	// Chmod the file world-readable (ioutil.TempFile creates files with
+	// mode 0600) before renaming.
+	if err := f.Chmod(0644); err != nil {
+		return err
+	}
+
+	// fsync(2) after fchmod(2) orders writes as per
+	// https://lwn.net/Articles/270891/. Can be skipped for performance
+	// for idempotent applications (which only ever atomically write new
+	// files and tolerate file loss) on an ordered file systems. ext3,
+	// ext4, XFS, Btrfs, ZFS are ordered by default.
+	f.Sync()
+
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(f.Name(), dest)
 }

@@ -22,10 +22,12 @@ require (
 	github.com/peterbourgon/diskv v2.0.1+incompatible
 	github.com/pkg/errors v0.8.1 // indirect
 	github.com/pquerna/cachecontrol v0.0.0-20180517163645-1555304b9b35
-	github.com/will7200/go-wakatime v0.1.11
+	github.com/will7200/go-wakatime v0.1.14
 	go.uber.org/atomic v1.3.2 // indirect
 	go.uber.org/multierr v1.1.0 // indirect
 	go.uber.org/zap v1.9.1
 	golang.org/x/sys v0.0.0-20190124100055-b90733256f2e // indirect
 	gopkg.in/cheggaaa/pb.v1 v1.0.27
 )
+
+go 1.13
