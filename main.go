@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/alecthomas/kingpin"
@@ -329,7 +330,7 @@ func addUsers(leaderboard *leaders.LeaderOK, mapusers map[string]bool, m DiskMap
 
 func addUsersFromArray(mapusers map[string]bool) {
 	var users []string
-	users = make([]string, 0)
+	users = make([]string, 0, 5000)
 	if _, err := os.Stat(usersFile); err == nil {
 		if err := Load(usersFile, &users, GlobDecoder); err != nil {
 			panic(err.Error())
@@ -341,6 +342,7 @@ func addUsersFromArray(mapusers map[string]bool) {
 }
 
 func writeAllUsers(m map[string]bool) {
+	logger.Sugar().Debug("Total in array ", len(m))
 	users := make([]string, len(m))
 	i := 0
 	for key, _ := range m {
@@ -351,11 +353,14 @@ func writeAllUsers(m map[string]bool) {
 	if err != nil {
 		panic(err)
 	}
-	writeAtomically(usersFile, func(w io.Writer) error {
+	err = writeAtomically(usersFile, func(w io.Writer) error {
 		bb := b.(*bytes.Buffer)
 		_, err := w.Write(bb.Bytes())
 		return err
 	})
+	if err != nil {
+		panic(err)
+	}
 }
 
 func writeAtomically(dest string, write func(w io.Writer) error) (err error) {
@@ -399,9 +404,31 @@ func writeAtomically(dest string, write func(w io.Writer) error) (err error) {
 	// ext4, XFS, Btrfs, ZFS are ordered by default.
 	f.Sync()
 
+	err = os.Rename(f.Name(), dest)
+	if err != nil {
+		if strings.Contains(err.Error(), "invalid cross-device") {
+			defer os.Remove(f.Name())
+			ff, err := os.Create(dest)
+			if err != nil {
+				return err
+			}
+			f.Sync()
+			f.Seek(0, 0)
+			_, err = io.Copy(ff, f)
+			if err != nil {
+				return err
+			}
+			err = ff.Sync()
+			if err != nil {
+				return err
+			}
+			err = ff.Close()
+			return err
+		}
+		return err
+	}
 	if err := f.Close(); err != nil {
 		return err
 	}
-
-	return os.Rename(f.Name(), dest)
+	return nil
 }

@@ -141,6 +141,7 @@ func (m *DiskMappedObject) Write(force bool) (rerr error) {
 	err = os.Rename(tmpfile.Name(), m.file)
 	if err != nil {
 		if strings.Contains(err.Error(), "invalid cross-device") {
+			defer os.Remove(tmpfile.Name())
 			f, err := os.Create(m.file)
 			if err != nil {
 				return err
